@@ -1,0 +1,743 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Route;
+use App\Models\RouteStop;
+use App\Models\Store;
+use App\Models\StoreTransaction;
+use App\Models\StoreTransactionPayment;
+use App\Models\User;
+use App\Models\Visit;
+use App\Services\StoreReceivableService;
+use Database\Seeders\RolePermissionSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class SalesPerTransactionCheckoutPiutangTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private User $admin;
+    private User $superAdmin;
+    private User $sales1;
+    private User $sales2;
+    private User $driver;
+    private Store $store1;
+    private Store $store2;
+    private Route $route1;
+    private RouteStop $stop1;
+    private string $dummyPhoto;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed(RolePermissionSeeder::class);
+
+        $this->admin = User::factory()->create(['name' => 'Admin Test']);
+        $this->admin->assignRole('admin');
+
+        $this->superAdmin = User::factory()->create(['name' => 'Super Admin Test']);
+        $this->superAdmin->assignRole('super-admin');
+
+        $this->sales1 = User::factory()->create(['name' => 'Sales Satu']);
+        $this->sales1->assignRole('sales');
+
+        $this->sales2 = User::factory()->create(['name' => 'Sales Dua']);
+        $this->sales2->assignRole('sales');
+
+        $this->driver = User::factory()->create(['name' => 'Driver Test']);
+        $this->driver->assignRole('driver');
+
+        $this->store1 = Store::create([
+            'name' => 'Toko Barokah Jaya',
+            'code' => 'TBJ-01',
+            'address' => 'Jl. Merdeka No. 10',
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'city' => 'Jakarta Barat',
+            'province' => 'DKI Jakarta',
+            'status' => 'active',
+            'sales_penanggung_jawab_id' => $this->sales1->id,
+        ]);
+
+        $this->store2 = Store::create([
+            'name' => 'Toko Sentosa',
+            'code' => 'STS-02',
+            'address' => 'Jl. Asia Afrika No. 20',
+            'latitude' => -6.917464,
+            'longitude' => 107.619123,
+            'city' => 'Bandung',
+            'province' => 'Jawa Barat',
+            'status' => 'active',
+            'sales_penanggung_jawab_id' => $this->sales2->id,
+        ]);
+
+        $this->route1 = Route::create([
+            'user_id' => $this->sales1->id,
+            'name' => 'Rute Kunjungan Harian',
+            'date' => now()->toDateString(),
+            'status' => 'active',
+            'started_at' => now(),
+        ]);
+
+        $this->stop1 = RouteStop::create([
+            'route_id' => $this->route1->id,
+            'store_id' => $this->store1->id,
+            'sequence' => 1,
+            'status' => 'visited',
+        ]);
+
+        $this->dummyPhoto = 'data:image/jpeg;base64,' . base64_encode('fake_image_content');
+    }
+
+    private function createActiveVisit(User $user, Store $store, RouteStop $stop): Visit
+    {
+        return Visit::create([
+            'user_id' => $user->id,
+            'route_stop_id' => $stop->id,
+            'route_id' => $stop->route_id,
+            'store_id' => $store->id,
+            'status' => 'in_progress',
+            'check_in_at' => now(),
+            'check_in_lat' => -6.175392,
+            'check_in_lng' => 106.827153,
+            'check_in_address' => 'Jakarta Barat',
+            'check_in_maps_url' => 'https://maps.google.com/?q=-6.175392,106.827153',
+            'selfie' => 'visits/checkin_sample.jpg',
+        ]);
+    }
+
+    /**
+     * TEST A: Toko memiliki 1 transaksi piutang, Sales melihat 1 transaksi dengan rincian kode, total, sudah dibayar, sisa piutang dan petunjuk pemilihan
+     */
+    public function test_a_toko_memiliki_satu_transaksi_piutang(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+            'paid_amount' => 30000,
+            'description' => 'Faktur A1',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->get(route('visit.check-out-form', $visit->id));
+        $response->assertOk();
+        $response->assertSee($trx1->transaction_code);
+        $response->assertSee('Faktur A1');
+        $response->assertSee('Total Transaksi: Rp');
+        $response->assertSee('Sudah Dibayar: Rp');
+        $response->assertSee('Sisa Piutang: Rp');
+        $response->assertSee('Silakan pilih transaksi piutang yang akan dibayar.');
+    }
+
+    /**
+     * TEST B: Toko memiliki 3 transaksi piutang, Sales melihat 3 transaksi
+     */
+    public function test_b_toko_memiliki_tiga_transaksi_piutang(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+            'paid_amount' => 20000,
+            'description' => 'Faktur 1',
+        ], $this->sales1);
+
+        $trx2 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 150000,
+            'paid_amount' => 50000,
+            'description' => 'Faktur 2',
+        ], $this->sales1);
+
+        $trx3 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 75000,
+            'paid_amount' => 0,
+            'description' => 'Faktur 3',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->get(route('visit.check-out-form', $visit->id));
+        $response->assertOk();
+        $response->assertSee($trx1->transaction_code);
+        $response->assertSee($trx2->transaction_code);
+        $response->assertSee($trx3->transaction_code);
+    }
+
+    /**
+     * TEST C, D, E, H, J:
+     * Toko memiliki 3 transaksi:
+     * TRX-1 sisa 80.000, TRX-2 sisa 100.000, TRX-3 sisa 75.000.
+     * Sales memilih TRX-1 (bayar 40.000) dan TRX-3 (bayar 75.000 pelunasan).
+     * TRX-2 tidak dibayar (tetap 100.000).
+     */
+    public function test_c_d_e_h_j_pembayaran_spesifik_per_transaksi(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+            'paid_amount' => 20000,
+            'description' => 'Faktur 1',
+        ], $this->sales1);
+
+        $trx2 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 150000,
+            'paid_amount' => 50000,
+            'description' => 'Faktur 2',
+        ], $this->sales1);
+
+        $trx3 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 75000,
+            'paid_amount' => 0,
+            'description' => 'Faktur 3',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Pembayaran parsial TRX1 dan lunas TRX3',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx1->id, 'amount' => 40000],
+                ['store_transaction_id' => $trx3->id, 'amount' => 75000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertOk();
+
+        $trx1->refresh();
+        $trx2->refresh();
+        $trx3->refresh();
+
+        // TRX 1: 80.000 - 40.000 = 40.000 (SEBAGIAN)
+        $this->assertEquals(40000.0, $trx1->remaining_amount);
+        $this->assertEquals(60000.0, $trx1->total_paid);
+        $this->assertEquals(StoreTransaction::STATUS_SEBAGIAN, $trx1->status);
+
+        // TRX 2: tetap 100.000 (SEBAGIAN)
+        $this->assertEquals(100000.0, $trx2->remaining_amount);
+        $this->assertEquals(50000.0, $trx2->total_paid);
+
+        // TRX 3: 75.000 - 75.000 = 0 (LUNAS)
+        $this->assertEquals(0.0, $trx3->remaining_amount);
+        $this->assertEquals(75000.0, $trx3->total_paid);
+        $this->assertEquals(StoreTransaction::STATUS_LUNAS, $trx3->status);
+
+        // Total saldo toko = 40.000 + 100.000 + 0 = 140.000
+        $this->assertSame('140000.00', StoreReceivableService::balanceForStore($this->store1->id));
+
+        // Payment records terpisah
+        $this->assertDatabaseHas('store_transaction_payments', [
+            'store_transaction_id' => $trx1->id,
+            'amount' => 40000.00,
+            'source' => 'visit',
+            'source_id' => $visit->id,
+            'payment_method' => 'tunai',
+        ]);
+        $this->assertDatabaseHas('store_transaction_payments', [
+            'store_transaction_id' => $trx3->id,
+            'amount' => 75000.00,
+            'source' => 'visit',
+            'source_id' => $visit->id,
+            'payment_method' => 'tunai',
+        ]);
+    }
+
+    /**
+     * TEST F: Pembayaran melebihi remaining ditolak
+     */
+    public function test_f_pembayaran_melebihi_remaining_ditolak(): void
+    {
+        $trx = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+            'paid_amount' => 20000, // sisa 80.000
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Bayar lebih',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx->id, 'amount' => 90000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertStatus(422);
+        $trx->refresh();
+        $this->assertEquals(80000.0, $trx->remaining_amount);
+    }
+
+    /**
+     * TEST G: Pembayaran Rp0 tidak membuat payment
+     */
+    public function test_g_pembayaran_nol_tidak_membuat_payment(): void
+    {
+        $trx = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Tidak bayar',
+            'transaction_status' => 'none',
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertOk();
+        $this->assertEquals(0, StoreTransactionPayment::where('store_transaction_id', $trx->id)->count());
+    }
+
+    /**
+     * TEST I: Histori payment sebelumnya tetap utuh
+     */
+    public function test_i_histori_payment_sebelumnya_tetap_utuh(): void
+    {
+        $trx = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+            'paid_amount' => 20000, // Payment 1
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Cicilan kedua',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'transfer',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx->id, 'amount' => 30000], // Payment 2
+            ],
+            'selfie' => $this->dummyPhoto,
+        ])->assertOk();
+
+        $trx->refresh();
+        $this->assertEquals(2, $trx->payments()->count());
+        $this->assertEquals(50000.0, $trx->total_paid);
+    }
+
+    /**
+     * TEST K: Detail Visit menampilkan pembayaran per transaksi
+     */
+    public function test_k_detail_visit_menampilkan_pembayaran_per_transaksi(): void
+    {
+        $trx = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+            'description' => 'Faktur Pembelian Kue',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Bayar faktur',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx->id, 'amount' => 40000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ])->assertOk();
+
+        $resShow = $this->actingAs($this->sales1)->get(route('visit.show', $visit->id));
+        $resShow->assertOk();
+        $resShow->assertSee($trx->transaction_code);
+        $resShow->assertSee('Rp 40.000');
+        $resShow->assertSee('TUNAI');
+    }
+
+    /**
+     * TEST L: Sales lain tidak dapat membayar transaksi toko tersebut
+     */
+    public function test_l_sales_lain_tidak_dapat_membayar_transaksi_toko_tersebut(): void
+    {
+        // Store 2 belongs to Sales 2
+        $trxStore2 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store2->id,
+            'transaction_amount' => 100000,
+        ], $this->sales2);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        // Sales 1 attempts to pay Store 2's transaction
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Unauthorized attempt',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trxStore2->id, 'amount' => 50000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertStatus(403);
+        $trxStore2->refresh();
+        $this->assertEquals(100000.0, $trxStore2->remaining_amount);
+    }
+
+    /**
+     * TEST M: Driver tidak memiliki akses piutang
+     */
+    public function test_m_driver_tidak_memiliki_akses_piutang(): void
+    {
+        $driverRoute = Route::create([
+            'user_id' => $this->driver->id,
+            'name' => 'Rute Driver',
+            'date' => now()->toDateString(),
+            'status' => 'active',
+            'started_at' => now(),
+        ]);
+        $driverStop = RouteStop::create([
+            'route_id' => $driverRoute->id,
+            'store_id' => $this->store1->id,
+            'sequence' => 1,
+            'status' => 'visited',
+        ]);
+        $driverVisit = Visit::create([
+            'user_id' => $this->driver->id,
+            'route_stop_id' => $driverStop->id,
+            'route_id' => $driverRoute->id,
+            'store_id' => $this->store1->id,
+            'status' => 'in_progress',
+            'check_in_at' => now(),
+            'check_in_lat' => -6.175392,
+            'check_in_lng' => 106.827153,
+            'check_in_address' => 'Jakarta Barat',
+            'check_in_maps_url' => 'https://maps.google.com',
+            'selfie' => 'selfie.jpg',
+        ]);
+
+        $resForm = $this->actingAs($this->driver)->get(route('visit.check-out-form', $driverVisit->id));
+        $resForm->assertOk();
+        $resForm->assertDontSee('Status Transaksi / Pembayaran');
+    }
+
+    /**
+     * TEST N: Double checkout ditolak
+     */
+    public function test_n_double_checkout_ditolak(): void
+    {
+        $trx = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $payload = [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Checkout 1',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx->id, 'amount' => 50000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ];
+
+        $res1 = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), $payload);
+        $res1->assertOk();
+
+        $res2 = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), $payload);
+        $res2->assertStatus(422);
+
+        $trx->refresh();
+        $this->assertEquals(50000.0, $trx->remaining_amount);
+        $this->assertEquals(1, $trx->payments()->count());
+    }
+
+    /**
+     * TEST O: Gabungan pembayaran piutang lama + transaksi baru tetap benar
+     */
+    public function test_o_gabungan_piutang_lama_dan_transaksi_baru(): void
+    {
+        $trxOld = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Bayar lama dan order baru',
+            'transaction_status' => 'mixed',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trxOld->id, 'amount' => 40000],
+            ],
+            'new_tx_total' => 200000,
+            'new_tx_paid' => 50000,
+            'new_payment_method' => 'transfer',
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertOk();
+
+        $trxOld->refresh();
+        $this->assertEquals(60000.0, $trxOld->remaining_amount);
+
+        $trxNew = StoreTransaction::where('reference_id', $visit->id)->first();
+        $this->assertNotNull($trxNew);
+        $this->assertEquals(150000.0, $trxNew->remaining_amount);
+
+        // Saldo total = 60.000 + 150.000 = 210.000
+        $this->assertSame('210000.00', StoreReceivableService::balanceForStore($this->store1->id));
+    }
+
+    /**
+     * TEST P & Q: Admin dan Super Admin dapat melihat hasil pembayaran
+     */
+    public function test_p_q_admin_dan_super_admin_melihat_hasil_pembayaran(): void
+    {
+        $trx = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 100000,
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Bayar cicilan',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx->id, 'amount' => 50000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ])->assertOk();
+
+        // Admin check
+        $resAdmin = $this->actingAs($this->admin)->get(route('admin.receivables.transactions.show', $trx->id));
+        $resAdmin->assertOk();
+        $resAdmin->assertSee('Rp 50.000');
+
+        // Super Admin check
+        $resSuper = $this->actingAs($this->superAdmin)->get(route('admin.receivables.transactions.show', $trx->id));
+        $resSuper->assertOk();
+        $resSuper->assertSee('Rp 50.000');
+    }
+
+    /**
+     * TEST R: Default input pembayaran piutang lama = 0 dan tidak ada payment record otomatis dibuat saat buka form
+     */
+    public function test_r_default_input_pembayaran_piutang_lama_adalah_nol(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 250000,
+            'paid_amount' => 50000,
+            'description' => 'Faktur A1',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        // 1. Saat form dibuka, tidak ada payment record yang dibuat
+        $response = $this->actingAs($this->sales1)->get(route('visit.check-out-form', $visit->id));
+        $response->assertOk();
+        $this->assertEquals(1, $trx1->payments()->count()); // Hanya 1 payment inisial saat createTransaction
+        $this->assertEquals(200000.0, $trx1->fresh()->remaining_amount);
+
+        // 2. Submit dengan allocations bernilai 0 / kosong tidak membuat payment baru
+        $postRes = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Hanya survey, input piutang dibiarkan 0',
+            'transaction_status' => 'none',
+            'selfie' => $this->dummyPhoto,
+        ]);
+        $postRes->assertOk();
+
+        // 3. Saldo tetap tidak berubah
+        $this->assertEquals(200000.0, $trx1->fresh()->remaining_amount);
+        $this->assertEquals(1, $trx1->fresh()->payments()->count());
+    }
+
+    /**
+     * TEST S: Mengisi satu transaksi dengan nominal tertentu hanya membuat payment untuk transaksi tersebut
+     */
+    public function test_s_mengisi_satu_transaksi_hanya_membuat_payment_untuk_transaksi_itu(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 250000,
+            'paid_amount' => 0,
+            'description' => 'TRX-001',
+        ], $this->sales1);
+
+        $trx2 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 500000,
+            'paid_amount' => 0,
+            'description' => 'TRX-002',
+        ], $this->sales1);
+
+        $trx3 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 1000000,
+            'paid_amount' => 0,
+            'description' => 'TRX-003',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        // Sales menginput Rp100.000 untuk TRX-1, Rp0 untuk TRX-2, Rp250.000 untuk TRX-3
+        // (TRX-2 bernilai 0 difilter atau amount 0)
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Bayar TRX1 dan TRX3',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx1->id, 'amount' => 100000],
+                ['store_transaction_id' => $trx3->id, 'amount' => 250000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertOk();
+
+        $trx1->refresh();
+        $trx2->refresh();
+        $trx3->refresh();
+
+        $this->assertEquals(150000.0, $trx1->remaining_amount);
+        $this->assertEquals(500000.0, $trx2->remaining_amount);
+        $this->assertEquals(750000.0, $trx3->remaining_amount);
+
+        // Tidak ada payment baru pada TRX-2
+        $this->assertEquals(0, StoreTransactionPayment::where('store_transaction_id', $trx2->id)->count());
+        // Ada 1 payment pada TRX-1
+        $this->assertEquals(1, StoreTransactionPayment::where('store_transaction_id', $trx1->id)->count());
+        // Ada 1 payment pada TRX-3
+        $this->assertEquals(1, StoreTransactionPayment::where('store_transaction_id', $trx3->id)->count());
+    }
+
+    /**
+     * TEST T: Validasi backend menolak nominal negatif
+     */
+    public function test_t_nominal_negatif_ditolak_oleh_backend(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 250000,
+            'paid_amount' => 0,
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'Nominal negatif',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx1->id, 'amount' => -50000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertStatus(422);
+    }
+
+    /**
+     * TEST U: Membatalkan pilihan (uncheck) tidak mengirimkan allocation dan tidak membuat payment
+     */
+    public function test_u_uncheck_transaksi_tidak_membuat_payment(): void
+    {
+        $trx1 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 300000,
+            'paid_amount' => 0,
+            'description' => 'TRX-UNCHECK-1',
+        ], $this->sales1);
+
+        $trx2 = StoreReceivableService::createTransaction([
+            'store_id' => $this->store1->id,
+            'transaction_amount' => 400000,
+            'paid_amount' => 0,
+            'description' => 'TRX-UNCHECK-2',
+        ], $this->sales1);
+
+        $visit = $this->createActiveVisit($this->sales1, $this->store1, $this->stop1);
+
+        // Hanya TRX-1 yang tetap dipilih dan dialokasikan
+        $response = $this->actingAs($this->sales1)->postJson(route('visit.check-out', $visit->id), [
+            'latitude' => -6.175392,
+            'longitude' => 106.827153,
+            'address' => 'Jakarta Barat',
+            'maps_url' => 'https://maps.google.com',
+            'visit_result' => 'TRX2 di-uncheck',
+            'transaction_status' => 'piutang',
+            'old_payment_method' => 'tunai',
+            'old_payment_allocations' => [
+                ['store_transaction_id' => $trx1->id, 'amount' => 150000],
+            ],
+            'selfie' => $this->dummyPhoto,
+        ]);
+
+        $response->assertOk();
+
+        $trx1->refresh();
+        $trx2->refresh();
+
+        $this->assertEquals(150000.0, $trx1->remaining_amount);
+        $this->assertEquals(400000.0, $trx2->remaining_amount);
+        $this->assertEquals(0, StoreTransactionPayment::where('store_transaction_id', $trx2->id)->count());
+        $this->assertEquals(1, StoreTransactionPayment::where('store_transaction_id', $trx1->id)->count());
+    }
+}

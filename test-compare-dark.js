@@ -1,0 +1,71 @@
+import fs from 'fs';
+
+const html = `<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+<meta charset="utf-8">
+<style>
+html { background-color: #030712; color: #f9fafb; color-scheme: dark; }
+body { background: #030712; font-family: sans-serif; padding: 20px; }
+.card { background: #111827; border: 1px solid #1f2937; border-radius: 16px; padding: 20px; width: 400px; margin-bottom: 20px; }
+
+/* Global rule that exists right now in app.blade.php */
+.dark input[type="date"]::-webkit-calendar-picker-indicator,
+html.dark input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(1) brightness(1.2) contrast(1.1) !important;
+    opacity: 0.95 !important;
+}
+
+/* Style for input in card */
+input[type="date"] {
+    display: block;
+    width: 100%;
+    min-height: 3rem;
+    border: 2px solid #374151;
+    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+    background-color: #1f2937;
+    color: #e5e7eb;
+    box-sizing: border-box;
+    font-size: 0.875rem;
+}
+
+/* Scenario 1: Current app.blade.php (Icon becomes black because color-scheme: dark + filter: invert(1)) */
+.card-current label { color: #f87171; font-weight: bold; display: block; margin-bottom: 8px; }
+
+/* Scenario 2: Fix with filter: none !important on #sw-filter-card */
+.card-fixed label { color: #4ade80; font-weight: bold; display: block; margin-bottom: 8px; }
+.card-fixed input[type="date"] {
+    color-scheme: dark;
+}
+.card-fixed input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: none !important;
+    opacity: 0.95 !important;
+}
+
+/* Scenario 3: Fix with pure white SVG icon (mask/background) just to compare */
+.card-svg label { color: #60a5fa; font-weight: bold; display: block; margin-bottom: 8px; }
+.card-svg input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: none !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='%23ffffff' viewBox='0 0 24 24'%3E%3Cpath d='M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11z'/%3E%3C/svg%3E") !important;
+    background-size: 18px 18px;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.95 !important;
+}
+</style>
+</head>
+<body>
+  <div class="card card-current">
+    <label>Current Behavior (Black icon on dark bg):</label>
+    <input type="date" value="2026-09-07">
+  </div>
+
+  <div class="card card-fixed">
+    <label>Fixed (filter: none + color-scheme: dark -> Native White icon):</label>
+    <input type="date" value="2026-09-07">
+  </div>
+</body>
+</html>`;
+
+fs.writeFileSync('test-compare-dark.html', html);

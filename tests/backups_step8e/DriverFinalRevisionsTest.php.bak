@@ -1,0 +1,337 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Exports\DriverVisitsExport;
+use App\Models\Route;
+use App\Models\RouteStop;
+use App\Models\Store;
+use App\Models\User;
+use App\Models\Visit;
+use App\Models\VisitPhoto;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
+use Maatwebsite\Excel\Facades\Excel;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use Spatie\Permission\Models\Role;
+use Tests\TestCase;
+
+class DriverFinalRevisionsTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected User $driver;
+    protected User $sales;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Role::firstOrCreate(['name' => 'driver', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'sales', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'web']);
+
+        $this->driver = User::factory()->create();
+        $this->driver->assignRole('driver');
+
+        $this->sales = User::factory()->create();
+        $this->sales->assignRole('sales');
+    }
+
+    public function test_checkout_view_renders_tambah_foto_lainnya_without_plus_sign_in_text(): void
+    {
+        $store = Store::create([
+            'name' => 'Toko View Teks',
+            'code' => 'TKS-VT-01',
+            'address' => 'Jl. View Teks',
+            'is_delivery_destination' => true,
+            'status' => 'active',
+        ]);
+
+        $route = Route::create([
+            'user_id' => $this->driver->id,
+            'created_by' => $this->driver->id,
+            'name' => 'Rute Test View Teks',
+            'date' => now()->format('Y-m-d'),
+            'status' => 'active',
+        ]);
+
+        $stop = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $store->id,
+            'sequence' => 1,
+            'status' => 'pending',
+            'notes' => 'Catatan Toko Khusus',
+        ]);
+
+        $visit = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stop->id,
+            'user_id' => $this->driver->id,
+            'store_id' => $store->id,
+            'status' => 'in_progress',
+            'check_in_at' => now()->subMinutes(10),
+            'check_in_lat' => -6.2,
+            'check_in_lng' => 106.8,
+            'check_in_address' => 'Jakarta',
+            'check_in_selfie' => 'selfie.jpg',
+        ]);
+
+        $response = $this->actingAs($this->driver)->get(route('visit.check-out-form', $visit->id));
+        $response->assertStatus(200);
+
+        // Tidak boleh ada teks "+ Tambah Foto Lainnya"
+        $response->assertDontSee('+ Tambah Foto Lainnya');
+        // Harus menggunakan "Tambah Foto Lainnya"
+        $response->assertSee('Tambah Foto Lainnya');
+        $response->assertSee('Foto Dokumentasi');
+    }
+
+    public function test_checkout_backend_accepts_up_to_6_photos_and_rejects_7th_photo(): void
+    {
+        $store = Store::create([
+            'name' => 'Toko 6 Photos',
+            'code' => 'TKS-6P-01',
+            'address' => 'Jl. 6 Photos',
+            'is_delivery_destination' => true,
+            'status' => 'active',
+        ]);
+
+        $route = Route::create([
+            'user_id' => $this->driver->id,
+            'created_by' => $this->driver->id,
+            'name' => 'Rute Test Max Photos',
+            'date' => now()->format('Y-m-d'),
+            'status' => 'active',
+        ]);
+
+        $stop = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $store->id,
+            'sequence' => 1,
+            'status' => 'pending',
+        ]);
+
+        $visit = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stop->id,
+            'user_id' => $this->driver->id,
+            'store_id' => $store->id,
+            'status' => 'in_progress',
+            'check_in_at' => now()->subMinutes(10),
+            'check_in_lat' => -6.2,
+            'check_in_lng' => 106.8,
+            'check_in_address' => 'Jakarta',
+            'check_in_selfie' => 'selfie.jpg',
+        ]);
+
+        // Skenario 1: 7 foto base64 -> Harus ditolak (422)
+        $sevenPhotos = [
+            'data:image/jpeg;base64,' . base64_encode('photo1'),
+            'data:image/jpeg;base64,' . base64_encode('photo2'),
+            'data:image/jpeg;base64,' . base64_encode('photo3'),
+            'data:image/jpeg;base64,' . base64_encode('photo4'),
+            'data:image/jpeg;base64,' . base64_encode('photo5'),
+            'data:image/jpeg;base64,' . base64_encode('photo6'),
+            'data:image/jpeg;base64,' . base64_encode('photo7'),
+        ];
+
+        $payload7 = [
+            'latitude' => -6.2,
+            'longitude' => 106.8,
+            'address' => 'Jakarta',
+            'maps_url' => 'https://maps.google.com/?q=-6.2,106.8',
+            'visit_result' => 'Barang diterima lengkap',
+            'transaction_status' => 'none',
+            'photos' => $sevenPhotos,
+        ];
+
+        $resp7 = $this->actingAs($this->driver)->postJson(route('visit.check-out', $visit->id), $payload7);
+        $resp7->assertStatus(422);
+
+        // Skenario 2: 6 foto base64 -> Harus sukses (200)
+        $sixPhotos = array_slice($sevenPhotos, 0, 6);
+        $payload6 = [
+            'latitude' => -6.2,
+            'longitude' => 106.8,
+            'address' => 'Jakarta',
+            'maps_url' => 'https://maps.google.com/?q=-6.2,106.8',
+            'visit_result' => 'Barang diterima lengkap 6 foto',
+            'transaction_status' => 'none',
+            'photos' => $sixPhotos,
+        ];
+
+        $resp6 = $this->actingAs($this->driver)->postJson(route('visit.check-out', $visit->id), $payload6);
+        $resp6->assertStatus(200);
+
+        $this->assertEquals('completed', $visit->fresh()->status);
+        $this->assertCount(6, $visit->fresh()->checkoutPhotos);
+    }
+
+    public function test_driver_transaction_ui_and_validation(): void
+    {
+        $store = Store::create([
+            'name' => 'Toko Transaksi',
+            'code' => 'TKS-TRX-01',
+            'address' => 'Jl. Transaksi',
+            'is_delivery_destination' => true,
+            'status' => 'active',
+        ]);
+
+        $route = Route::create([
+            'user_id' => $this->driver->id,
+            'created_by' => $this->driver->id,
+            'name' => 'Rute Test Transaksi Driver',
+            'date' => now()->format('Y-m-d'),
+            'status' => 'active',
+        ]);
+
+        $stop = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $store->id,
+            'sequence' => 1,
+            'status' => 'pending',
+        ]);
+
+        $visit = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stop->id,
+            'user_id' => $this->driver->id,
+            'store_id' => $store->id,
+            'status' => 'in_progress',
+            'check_in_at' => now()->subMinutes(10),
+            'check_in_lat' => -6.2,
+            'check_in_lng' => 106.8,
+            'check_in_address' => 'Jakarta',
+            'check_in_selfie' => 'selfie.jpg',
+        ]);
+
+        // Jika paid tapi nominal 0 / negatif -> Ditolak
+        $invalidTxPayload = [
+            'latitude' => -6.2,
+            'longitude' => 106.8,
+            'address' => 'Jakarta',
+            'maps_url' => 'https://maps.google.com/?q=-6.2,106.8',
+            'visit_result' => 'Barang diterima',
+            'transaction_status' => 'paid',
+            'transaction_amount' => 0,
+            'payment_method' => 'tunai',
+            'photos' => ['data:image/jpeg;base64,' . base64_encode('photo1')],
+        ];
+
+        $respInvalid = $this->actingAs($this->driver)->postJson(route('visit.check-out', $visit->id), $invalidTxPayload);
+        $respInvalid->assertStatus(422);
+
+        // Jika paid dengan nominal valid -> Berhasil
+        $validTxPayload = [
+            'latitude' => -6.2,
+            'longitude' => 106.8,
+            'address' => 'Jakarta',
+            'maps_url' => 'https://maps.google.com/?q=-6.2,106.8',
+            'visit_result' => 'Barang diterima dengan transaksi tunai',
+            'transaction_status' => 'paid',
+            'transaction_amount' => 1500000,
+            'payment_method' => 'tunai',
+            'photos' => ['data:image/jpeg;base64,' . base64_encode('photo1')],
+        ];
+
+        $respValid = $this->actingAs($this->driver)->postJson(route('visit.check-out', $visit->id), $validTxPayload);
+        $respValid->assertStatus(200);
+
+        $v = $visit->fresh();
+        $this->assertEquals(1500000, (float) $v->transaction_amount);
+        $this->assertEquals('tunai', $v->payment_method);
+        $this->assertEquals('paid', $v->transaction_status);
+    }
+
+    public function test_store_notes_appear_in_pdf_and_excel_and_do_not_mix(): void
+    {
+        $storeA = Store::create(['name' => 'Toko Alfa', 'code' => 'ALF-01', 'address' => 'Jl. A', 'is_delivery_destination' => true, 'status' => 'active']);
+        $storeB = Store::create(['name' => 'Toko Beta', 'code' => 'BET-02', 'address' => 'Jl. B', 'is_delivery_destination' => true, 'status' => 'active']);
+
+        $route = Route::create([
+            'user_id' => $this->driver->id,
+            'created_by' => $this->driver->id,
+            'name' => 'Rute Test Notes',
+            'date' => now()->format('Y-m-d'),
+            'status' => 'active',
+        ]);
+
+        $noteA = "Catatan Toko A: Bongkar di pintu samping barat.";
+        $noteB = "Catatan Toko B: Hubungi Pak Joko sebelum bongkar.";
+
+        $stopA = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $storeA->id,
+            'sequence' => 1,
+            'status' => 'visited',
+            'notes' => $noteA,
+        ]);
+
+        $stopB = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $storeB->id,
+            'sequence' => 2,
+            'status' => 'visited',
+            'notes' => $noteB,
+        ]);
+
+        $visitA = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stopA->id,
+            'user_id' => $this->driver->id,
+            'store_id' => $storeA->id,
+            'status' => 'completed',
+            'check_in_at' => now()->subMinutes(30),
+            'check_out_at' => now()->subMinutes(20),
+            'visit_result' => 'Terkirim A',
+        ]);
+
+        $visitB = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stopB->id,
+            'user_id' => $this->driver->id,
+            'store_id' => $storeB->id,
+            'status' => 'completed',
+            'check_in_at' => now()->subMinutes(15),
+            'check_out_at' => now()->subMinutes(5),
+            'visit_result' => 'Terkirim B',
+        ]);
+
+        // PDF Detail Toko A
+        $visitA->load(['store', 'user.roles', 'routeStop.route']);
+        $pdfA = view('visit.pdf.detail-driver', [
+            'visit' => $visitA,
+            'store' => $visitA->store,
+            'salesName' => $this->driver->name,
+            'salesRole' => 'Driver',
+            'stopNotes' => $visitA->routeStop->notes,
+            'durationLabel' => '10 Menit',
+            'storeBalance' => 0,
+            'logoPath' => public_path('assets/images/logo-isa-smartwork.png'),
+            'generatedAt' => now()->format('d M Y, H:i'),
+            'footerLine1' => 'PT ISA TRI SELARAS GEMILANG',
+            'footerLine2' => 'Dokumen dibuat otomatis oleh ISA SmartWork.',
+        ])->render();
+
+        $this->assertStringContainsString($noteA, $pdfA);
+        $this->assertStringNotContainsString($noteB, $pdfA);
+
+        // Excel Export
+        $export = new DriverVisitsExport([
+            'fromDate' => now()->format('Y-m-d'),
+            'toDate' => now()->format('Y-m-d'),
+            'userId' => $this->driver->id,
+        ]);
+
+        Excel::store($export, 'test_notes_isolation.xlsx', 'public');
+        $excelPath = Storage::disk('public')->path('test_notes_isolation.xlsx');
+        $spreadsheet = IOFactory::load($excelPath);
+        $sheet = $spreadsheet->getSheetByName('Rekap Pengiriman');
+
+        $this->assertEquals('Catatan Toko / Tujuan Pengiriman', $sheet->getCell('G9')->getValue());
+        $this->assertEquals($noteA, $sheet->getCell('G10')->getValue());
+        $this->assertEquals($noteB, $sheet->getCell('G11')->getValue());
+    }
+}

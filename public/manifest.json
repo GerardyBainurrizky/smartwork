@@ -1,0 +1,17 @@
+{
+    "name": "ISA SmartWork",
+    "short_name": "SmartWork",
+    "description": "Enterprise agricultural field management system by PT ISA Tri Selaras Gemilang",
+    "start_url": "/dashboard",
+    "display": "standalone",
+    "orientation": "portrait-primary",
+    "background_color": "#F7F7F7",
+    "theme_color": "#0DA4CE",
+    "icons": [
+        { "src": "/assets/images/logo-isa-smartwork.png", "sizes": "192x192", "type": "image/png" },
+        { "src": "/assets/images/logo-isa-smartwork.png", "sizes": "512x512", "type": "image/png" }
+    ],
+    "categories": ["business", "productivity"],
+    "lang": "id-ID",
+    "dir": "ltr"
+}

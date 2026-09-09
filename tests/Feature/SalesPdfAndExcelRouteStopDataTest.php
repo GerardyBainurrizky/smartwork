@@ -1,0 +1,304 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Exports\VisitsExport;
+use App\Models\Route;
+use App\Models\RouteStop;
+use App\Models\Store;
+use App\Models\User;
+use App\Models\Visit;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
+use Maatwebsite\Excel\Facades\Excel;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use Spatie\Permission\Models\Role;
+use Tests\TestCase;
+
+class SalesPdfAndExcelRouteStopDataTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected User $sales;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Role::firstOrCreate(['name' => 'sales', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'driver', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'web']);
+
+        $this->sales = User::factory()->create(['name' => 'Sales Budi Santoso']);
+        $this->sales->assignRole('sales');
+    }
+
+    public function test_sales_route_stop_duration_and_notes_flow_to_pdf_and_excel_correctly(): void
+    {
+        // 1. Setup 3 Stores for Sales
+        $storeA = Store::create([
+            'name' => 'Toko Subur Alfa',
+            'code' => 'TKS-ALF',
+            'address' => 'Jl. Mawar No. 10',
+            'city' => 'Bandung',
+            'sales_penanggung_jawab_id' => $this->sales->id,
+            'status' => 'active',
+        ]);
+
+        $storeB = Store::create([
+            'name' => 'Toko Makmur Beta',
+            'code' => 'TKS-BET',
+            'address' => 'Jl. Melati No. 20',
+            'city' => 'Bandung',
+            'sales_penanggung_jawab_id' => $this->sales->id,
+            'status' => 'active',
+        ]);
+
+        $storeC = Store::create([
+            'name' => 'Toko Jaya Gamma',
+            'code' => 'TKS-GAM',
+            'address' => 'Jl. Kenanga No. 30',
+            'city' => 'Bandung',
+            'sales_penanggung_jawab_id' => $this->sales->id,
+            'status' => 'active',
+        ]);
+
+        $route = Route::create([
+            'user_id' => $this->sales->id,
+            'created_by' => $this->sales->id,
+            'name' => 'Rute Kunjungan Sales Rutin',
+            'date' => now()->format('Y-m-d'),
+            'status' => 'active',
+        ]);
+
+        $noteA = "Catatan Toko A: Temui kepala toko sebelum cek display.";
+        $noteB = "Catatan Toko B: Prioritaskan pengecekan stok produk promo.";
+        $noteC = null; // Kosong
+
+        $stopA = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $storeA->id,
+            'sequence' => 1,
+            'estimated_duration_minutes' => 60,
+            'status' => 'visited',
+            'notes' => $noteA,
+        ]);
+
+        $stopB = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $storeB->id,
+            'sequence' => 2,
+            'estimated_duration_minutes' => 45,
+            'status' => 'visited',
+            'notes' => $noteB,
+        ]);
+
+        $stopC = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $storeC->id,
+            'sequence' => 3,
+            'estimated_duration_minutes' => 90,
+            'status' => 'visited',
+            'notes' => $noteC,
+        ]);
+
+        $visitA = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stopA->id,
+            'user_id' => $this->sales->id,
+            'store_id' => $storeA->id,
+            'status' => 'completed',
+            'check_in_at' => now()->subMinutes(180),
+            'check_out_at' => now()->subMinutes(120),
+            'visit_result' => 'Hasil Kunjungan A: Toko setuju tambah stok',
+            'final_notes' => 'Catatan Tambahan A: Minta dikirim hari rabu',
+        ]);
+
+        $visitB = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stopB->id,
+            'user_id' => $this->sales->id,
+            'store_id' => $storeB->id,
+            'status' => 'completed',
+            'check_in_at' => now()->subMinutes(110),
+            'check_out_at' => now()->subMinutes(70),
+            'visit_result' => 'Hasil Kunjungan B: Stok masih mencukupi',
+            'final_notes' => 'Catatan Tambahan B: Tidak ada kendala',
+        ]);
+
+        $visitC = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stopC->id,
+            'user_id' => $this->sales->id,
+            'store_id' => $storeC->id,
+            'status' => 'completed',
+            'check_in_at' => now()->subMinutes(60),
+            'check_out_at' => now()->subMinutes(10),
+            'visit_result' => 'Hasil Kunjungan C: Penawaran produk baru diterima',
+            'final_notes' => null,
+        ]);
+
+        // 2. Validasi PDF Detail Kunjungan Toko A
+        $visitA->load(['store', 'user.roles', 'routeStop.route', 'payments.transaction', 'transactions.payments']);
+        $pdfHtmlA = view('visit.pdf.detail', [
+            'visit' => $visitA,
+            'store' => $visitA->store,
+            'salesName' => $this->sales->name,
+            'salesRole' => 'Sales',
+            'durationLabel' => '60 Menit',
+            'estimatedDurationLabel' => '60 Menit',
+            'estimatedMinutes' => 60,
+            'stopNotes' => $stopA->notes,
+            'storeBalance' => 0,
+            'logoPath' => public_path('assets/images/logo-isa-smartwork.png'),
+            'generatedAt' => now()->format('d M Y, H:i'),
+            'footerLine1' => 'PT ISA TRI SELARAS GEMILANG',
+            'footerLine2' => 'Dokumen dibuat otomatis oleh ISA SmartWork.',
+        ])->render();
+
+        $this->assertStringContainsString('Estimasi Durasi', $pdfHtmlA);
+        $this->assertStringContainsString('60 menit', $pdfHtmlA);
+        $this->assertStringContainsString('Catatan Rencana Kunjungan', $pdfHtmlA);
+        $this->assertStringContainsString($noteA, $pdfHtmlA);
+        // Pastikan tidak bocor catatan Toko B
+        $this->assertStringNotContainsString($noteB, $pdfHtmlA);
+
+        // 3. Validasi PDF Detail Kunjungan Toko C (Catatan kosong -> "-")
+        $visitC->load(['store', 'user.roles', 'routeStop.route', 'payments.transaction', 'transactions.payments']);
+        $pdfHtmlC = view('visit.pdf.detail', [
+            'visit' => $visitC,
+            'store' => $visitC->store,
+            'salesName' => $this->sales->name,
+            'salesRole' => 'Sales',
+            'durationLabel' => '50 Menit',
+            'estimatedDurationLabel' => '90 Menit',
+            'estimatedMinutes' => 90,
+            'stopNotes' => null,
+            'storeBalance' => 0,
+            'logoPath' => public_path('assets/images/logo-isa-smartwork.png'),
+            'generatedAt' => now()->format('d M Y, H:i'),
+            'footerLine1' => 'PT ISA TRI SELARAS GEMILANG',
+            'footerLine2' => 'Dokumen dibuat otomatis oleh ISA SmartWork.',
+        ])->render();
+
+        $this->assertStringContainsString('90 menit', $pdfHtmlC);
+
+        // 4. Validasi Excel Rekap Kunjungan
+        $export = new VisitsExport([
+            'fromDate' => now()->format('Y-m-d'),
+            'toDate' => now()->format('Y-m-d'),
+            'userId' => $this->sales->id,
+        ]);
+
+        Excel::store($export, 'test_sales_rekap_kunjungan.xlsx', 'public');
+        $excelPath = Storage::disk('public')->path('test_sales_rekap_kunjungan.xlsx');
+        $spreadsheet = IOFactory::load($excelPath);
+        $sheet = $spreadsheet->getSheetByName('Rekap Kunjungan');
+
+        // Validasi Header (Row 8)
+        $this->assertEquals('Estimasi Durasi (menit)', $sheet->getCell('G8')->getValue());
+        $this->assertEquals('Catatan Rencana Kunjungan', $sheet->getCell('H8')->getValue());
+
+        // Validasi Row 1 (Toko A: Urutan 1, 60 menit, Catatan A)
+        $this->assertEquals('Toko Subur Alfa', $sheet->getCell('D9')->getValue());
+        $this->assertEquals(1, $sheet->getCell('F9')->getValue());
+        $this->assertEquals('60 menit', $sheet->getCell('G9')->getValue());
+        $this->assertEquals($noteA, $sheet->getCell('H9')->getValue());
+
+        // Validasi Row 2 (Toko B: Urutan 2, 45 menit, Catatan B)
+        $this->assertEquals('Toko Makmur Beta', $sheet->getCell('D10')->getValue());
+        $this->assertEquals(2, $sheet->getCell('F10')->getValue());
+        $this->assertEquals('45 menit', $sheet->getCell('G10')->getValue());
+        $this->assertEquals($noteB, $sheet->getCell('H10')->getValue());
+
+        // Validasi Row 3 (Toko C: Urutan 3, 90 menit, Catatan '-')
+        $this->assertEquals('Toko Jaya Gamma', $sheet->getCell('D11')->getValue());
+        $this->assertEquals(3, $sheet->getCell('F11')->getValue());
+        $this->assertEquals('90 menit', $sheet->getCell('G11')->getValue());
+        $this->assertEquals('-', $sheet->getCell('H11')->getValue());
+    }
+
+    public function test_sales_multiline_route_stop_note_preserves_formatting(): void
+    {
+        $store = Store::create([
+            'name' => 'Toko Multi Line Note',
+            'code' => 'TKS-MLN',
+            'address' => 'Jl. Baris No. 99',
+            'sales_penanggung_jawab_id' => $this->sales->id,
+            'status' => 'active',
+        ]);
+
+        $route = Route::create([
+            'user_id' => $this->sales->id,
+            'created_by' => $this->sales->id,
+            'name' => 'Rute Test Multiline',
+            'date' => now()->format('Y-m-d'),
+            'status' => 'active',
+        ]);
+
+        $multilineNote = "Hubungi bagian purchasing terlebih dahulu.\nLakukan pengecekan stok.\nDokumentasikan hasil kunjungan.";
+
+        $stop = RouteStop::create([
+            'route_id' => $route->id,
+            'store_id' => $store->id,
+            'sequence' => 1,
+            'estimated_duration_minutes' => 60,
+            'status' => 'visited',
+            'notes' => $multilineNote,
+        ]);
+
+        $visit = Visit::create([
+            'route_id' => $route->id,
+            'route_stop_id' => $stop->id,
+            'user_id' => $this->sales->id,
+            'store_id' => $store->id,
+            'status' => 'completed',
+            'check_in_at' => now()->subMinutes(60),
+            'check_out_at' => now()->subMinutes(10),
+            'visit_result' => 'Selesai kunjungan',
+        ]);
+
+        $visit->load(['store', 'user.roles', 'routeStop.route']);
+
+        // PDF rendering
+        $pdfHtml = view('visit.pdf.detail', [
+            'visit' => $visit,
+            'store' => $visit->store,
+            'salesName' => $this->sales->name,
+            'salesRole' => 'Sales',
+            'durationLabel' => '50 Menit',
+            'stopNotes' => $visit->routeStop->notes,
+            'storeBalance' => 0,
+            'logoPath' => public_path('assets/images/logo-isa-smartwork.png'),
+            'generatedAt' => now()->format('d M Y, H:i'),
+            'footerLine1' => 'PT ISA TRI SELARAS GEMILANG',
+            'footerLine2' => 'Dokumen dibuat otomatis oleh ISA SmartWork.',
+        ])->render();
+
+        $this->assertStringContainsString('Hubungi bagian purchasing terlebih dahulu.', $pdfHtml);
+        $this->assertStringContainsString('Dokumentasikan hasil kunjungan.', $pdfHtml);
+
+        // Excel Export
+        $export = new VisitsExport([
+            'fromDate' => now()->format('Y-m-d'),
+            'toDate' => now()->format('Y-m-d'),
+            'userId' => $this->sales->id,
+        ]);
+
+        Excel::store($export, 'test_sales_multiline.xlsx', 'public');
+        $excelPath = Storage::disk('public')->path('test_sales_multiline.xlsx');
+        $spreadsheet = IOFactory::load($excelPath);
+        $sheet = $spreadsheet->getSheetByName('Rekap Kunjungan');
+
+        $cellValue = $sheet->getCell('H9')->getValue();
+        $this->assertEquals($multilineNote, $cellValue);
+    }
+
+    protected function tearDown(): void
+    {
+        Storage::disk('public')->delete(['test_sales_rekap_kunjungan.xlsx', 'test_sales_multiline.xlsx']);
+        parent::tearDown();
+    }
+}
+
