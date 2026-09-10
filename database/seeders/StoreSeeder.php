@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\Store;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Str;
 
 class StoreSeeder extends Seeder
 {
@@ -73,6 +74,7 @@ class StoreSeeder extends Seeder
         ];
 
         foreach ($stores as $store) {
+            $store['id'] = (string) Str::uuid();
             Store::firstOrCreate(['code' => $store['code']], $store);
         }
     }
