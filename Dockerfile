@@ -1,6 +1,6 @@
 FROM php:8.3-cli-alpine
 
-# Install dependensi sistem, library gambar (GD), dan zip
+# Install dependensi sistem, library gambar (GD), zip, dan sqlite-dev
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -10,7 +10,7 @@ RUN apk add --no-cache \
     libjpeg-turbo-dev \
     libpng-dev \
     libzip-dev \
-    sqlite \
+    sqlite-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) gd pdo_mysql zip pdo_sqlite
 
@@ -27,7 +27,7 @@ RUN composer install --no-dev --optimize-autoloader \
     && npm install \
     && npm run build
 
-# Siapkan file database sqlite kosong untuk pencegahan fallback & atur permissions
+# Siapkan file database sqlite kosong & atur permissions
 RUN mkdir -p database \
     && touch database/database.sqlite \
     && chmod -R 777 storage bootstrap/cache database
