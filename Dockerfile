@@ -1,16 +1,28 @@
 FROM php:8.3-cli-alpine
 
-# Install dependensi dan ekstensi pdo_mysql
-RUN apk add --no-cache nodejs npm git unzip libpng-dev libzip-dev \
-    && docker-php-ext-install pdo_mysql
+# Install dependensi sistem, library gambar (GD), dan zip
+RUN apk add --no-cache \
+    nodejs \
+    npm \
+    git \
+    unzip \
+    freetype-dev \
+    libjpeg-turbo-dev \
+    libpng-dev \
+    libzip-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) gd pdo_mysql zip
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
+# Izinkan composer dijalankan sebagai root di container
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
 WORKDIR /app
 COPY . .
 
-# Install dependencies & build frontend
+# Install dependensi PHP & Build asset frontend
 RUN composer install --no-dev --optimize-autoloader \
     && npm install \
     && npm run build
