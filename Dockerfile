@@ -16,7 +16,6 @@ RUN apk add --no-cache \
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Izinkan composer dijalankan sebagai root di container
 ENV COMPOSER_ALLOW_SUPERUSER=1
 
 WORKDIR /app
@@ -27,6 +26,9 @@ RUN composer install --no-dev --optimize-autoloader \
     && npm install \
     && npm run build
 
+# Beri izin akses tulis untuk storage dan cache Laravel
+RUN chmod -R 777 storage bootstrap/cache
+
 EXPOSE 8080
 
-CMD php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
+CMD php artisan optimize:clear && php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
