@@ -10,8 +10,9 @@ RUN apk add --no-cache \
     libjpeg-turbo-dev \
     libpng-dev \
     libzip-dev \
+    sqlite \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install -j$(nproc) gd pdo_mysql zip
+    && docker-php-ext-install -j$(nproc) gd pdo_mysql zip pdo_sqlite
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -26,9 +27,11 @@ RUN composer install --no-dev --optimize-autoloader \
     && npm install \
     && npm run build
 
-# Beri izin akses tulis untuk storage dan cache Laravel
-RUN chmod -R 777 storage bootstrap/cache
+# Siapkan file database sqlite kosong untuk pencegahan fallback & atur permissions
+RUN mkdir -p database \
+    && touch database/database.sqlite \
+    && chmod -R 777 storage bootstrap/cache database
 
 EXPOSE 8080
 
-CMD php artisan optimize:clear && php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
+CMD php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
