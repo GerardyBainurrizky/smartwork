@@ -34,4 +34,4 @@ RUN mkdir -p database \
 
 EXPOSE 8080
 
-CMD sh -c "export APP_KEY='base64:j726Ob5iq8nYmZWOt2NoEzmf0qUbSRX+IB0dj+I/kBA=' && export DB_CONNECTION=mysql && php artisan migrate --force && mkdir -p storage/logs storage/framework/sessions storage/framework/views storage/framework/cache && touch storage/logs/laravel.log && (tail -n 0 -F storage/logs/laravel.log &) && php -S 0.0.0.0:${PORT:-8080} -t public"
+CMD sh -c "export APP_KEY='base64:j726Ob5iq8nYmZWOt2NoEzmf0qUbSRX+IB0dj+I/kBA=' && export DB_CONNECTION=mysql && mkdir -p storage/logs storage/framework/sessions storage/framework/views storage/framework/cache && touch storage/logs/laravel.log && (tail -n 0 -F storage/logs/laravel.log &) && (php artisan migrate --force &) && php -S 0.0.0.0:${PORT:-8080} -t public"
