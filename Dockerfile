@@ -34,4 +34,4 @@ RUN mkdir -p database \
 
 EXPOSE 8080
 
-CMD sh -c "mkdir -p storage/logs && touch storage/logs/laravel.log && (tail -n 0 -F storage/logs/laravel.log &) && php -S 0.0.0.0:${PORT:-8080} -t public"
+CMD sh -c "export APP_KEY='base64:j726Ob5iq8nYmZWOt2NoEzmf0qUbSRX+IB0dj+I/kBA=' && mkdir -p storage/logs && touch storage/logs/laravel.log && (tail -n 0 -F storage/logs/laravel.log &) && php -S 0.0.0.0:${PORT:-8080} -t public"
