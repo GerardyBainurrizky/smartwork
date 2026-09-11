@@ -34,4 +34,4 @@ RUN mkdir -p database \
 
 EXPOSE 8080
 
-CMD sh -c "php -d display_errors=1 -d error_reporting=E_ALL -S 0.0.0.0:${PORT:-8080} -t public"
+CMD sh -c "mkdir -p storage/logs && touch storage/logs/laravel.log && (tail -n 0 -F storage/logs/laravel.log &) && php -S 0.0.0.0:${PORT:-8080} -t public"
